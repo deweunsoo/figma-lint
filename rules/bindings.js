@@ -4,7 +4,7 @@
  * Figma Plugin Console (figma_execute)에서 실행하는 검증 스크립트.
  * 하나라도 실패하면 통과시키지 않음.
  *
- * 검증 항목 (14개):
+ * 검증 항목 (16개):
  *  [Color]
  *   1. UNBOUND_FILL        - 배경색 변수 미바인딩
  *   2. UNBOUND_STROKE       - 테두리색 변수 미바인딩
@@ -23,6 +23,8 @@
  *  [Component Structure]
  *  13. FRAME_NOT_INSTANCE   - 컴포넌트여야 할 FRAME (예: button, icon)
  *  14. TEXT_STYLE_CONFLICT  - Text Style과 변수 바인딩 충돌
+ *  15. REMOTE_HAS_LOCAL     - remote 인스턴스에 동일 이름의 로컬 컴포넌트가 존재
+ *  16. VARIANT_STRUCTURE_MISMATCH - 같은 ComponentSet 내 variant 간 자식 구조 불일치
  *
  * 사용법: figma_execute에 이 스크립트 전체를 붙여넣기
  */
@@ -47,6 +49,19 @@ for (const child of componentsPage.children) collectComponents(child);
 
 // FRAME인데 INSTANCE여야 하는 이름 패턴
 const SHOULD_BE_INSTANCE = ['button', 'icon', 'checkbox', 'radio', 'toggle', 'spinner', 'avatar'];
+
+// ─── 로컬 ComponentSet 이름 수집 (REMOTE_HAS_LOCAL용) ───
+const localSetNames = new Set();
+function collectLocalSets(node) {
+  if (node.type === 'COMPONENT_SET') {
+    localSetNames.add(node.name.toLowerCase());
+    return;
+  }
+  if ('children' in node && node.type !== 'INSTANCE') {
+    for (const child of node.children) collectLocalSets(child);
+  }
+}
+for (const page of figma.root.children) collectLocalSets(page);
 
 // ─── 유틸 ───
 async function resolveColor(paint) {
@@ -143,6 +158,20 @@ async function validate(node, parentBg, depth, comp) {
     } catch (e) {}
   }
 
+  // ── [15] REMOTE_HAS_LOCAL ──
+  if (node.type === 'INSTANCE') {
+    try {
+      const main = await node.getMainComponentAsync();
+      if (main && main.remote) {
+        const parent = main.parent;
+        const setName = parent && parent.type === 'COMPONENT_SET' ? parent.name.toLowerCase() : null;
+        if (setName && localSetNames.has(setName)) {
+          allIssues.push({ comp, node: node.name, id: node.id, issue: 'REMOTE_HAS_LOCAL', remoteSet: parent.name });
+        }
+      }
+    } catch (e) {}
+  }
+
   // ── Recurse (INSTANCE 내부는 스킵) ──
   if ('children' in node && node.type !== 'INSTANCE') {
     for (const child of node.children) {
@@ -159,6 +188,88 @@ for (const node of targets) {
     }
   } else {
     await validate(node, { r: 1, g: 1, b: 1, a: 1 }, 0, node.name);
+  }
+}
+
+// ─── [16] VARIANT_STRUCTURE_MISMATCH ───
+// ComponentSet 내 variant들의 동일 이름 프레임이 다른 자식 구조를 가지면 감지
+for (const node of targets) {
+  if (node.type !== 'COMPONENT_SET') continue;
+
+  // 각 variant에서 프레임별 구조 시그니처 수집
+  function getSignatures(n, depth) {
+    if (depth > 4 || !('children' in n)) return {};
+    const sigs = {};
+    for (const child of n.children) {
+      if (child.type === 'FRAME' || child.type === 'GROUP') {
+        const childTypes = 'children' in child
+          ? child.children.map(gc => gc.type + ':' + gc.name).join(',')
+          : '';
+        const sig = {
+          childCount: 'children' in child ? child.children.length : 0,
+          childTypes,
+          gap: child.itemSpacing,
+        };
+        sigs[child.name] = sig;
+        // 재귀로 하위 프레임도 수집
+        const sub = getSignatures(child, depth + 1);
+        for (const [k, v] of Object.entries(sub)) {
+          sigs[child.name + '/' + k] = v;
+        }
+      }
+    }
+    return sigs;
+  }
+
+  // 모든 variant의 시그니처를 모음
+  const allSigs = [];
+  for (const variant of node.children) {
+    allSigs.push({ variant: variant.name, id: variant.id, sigs: getSignatures(variant, 0) });
+  }
+
+  // 동일 이름 프레임 간 비교
+  const frameNames = new Set();
+  for (const { sigs } of allSigs) {
+    for (const k of Object.keys(sigs)) frameNames.add(k);
+  }
+
+  for (const frameName of frameNames) {
+    // 이 프레임을 가진 variant들만 추출
+    const withFrame = allSigs.filter(s => s.sigs[frameName]);
+    if (withFrame.length < 2) continue;
+
+    // 시그니처 문자열로 비교
+    const sigStrs = withFrame.map(s => {
+      const sig = s.sigs[frameName];
+      return `${sig.childCount}|${sig.childTypes}|${sig.gap}`;
+    });
+
+    const unique = [...new Set(sigStrs)];
+    if (unique.length > 1) {
+      // 가장 흔한 패턴 vs 이탈 variant 찾기
+      const counts = {};
+      sigStrs.forEach((s, i) => {
+        if (!counts[s]) counts[s] = [];
+        counts[s].push(i);
+      });
+      const sorted = Object.entries(counts).sort((a, b) => b[1].length - a[1].length);
+      const majorPattern = sorted[0][0];
+      // 이탈 variant만 리포트
+      for (const [pattern, indices] of sorted) {
+        if (pattern === majorPattern) continue;
+        for (const idx of indices) {
+          allIssues.push({
+            comp: node.name,
+            node: frameName,
+            id: withFrame[idx].id,
+            issue: 'VARIANT_STRUCTURE_MISMATCH',
+            variant: withFrame[idx].variant,
+            expected: majorPattern,
+            actual: pattern,
+          });
+        }
+      }
+    }
   }
 }
 

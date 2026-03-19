@@ -6,7 +6,7 @@ Works with **any** design system, not tied to a specific token set.
 
 ## Rules
 
-### `rules/bindings.js` — 14 checks
+### `rules/bindings.js` — 16 checks
 
 | # | Rule | Category | Description |
 |---|------|----------|-------------|
@@ -24,6 +24,8 @@ Works with **any** design system, not tied to a specific token set.
 | 12 | UNBOUND_LINE_HEIGHT | Typography | Line height not bound to variable |
 | 13 | FRAME_NOT_INSTANCE | Structure | Frame should be a component instance |
 | 14 | TEXT_STYLE_CONFLICT | Structure | Text style conflicts with variable bindings |
+| 15 | REMOTE_HAS_LOCAL | Structure | Remote instance has a same-name local component set |
+| 16 | VARIANT_STRUCTURE_MISMATCH | Structure | Variants in a ComponentSet have inconsistent child structures |
 
 ## Usage
 
@@ -34,7 +36,7 @@ Copy the contents of `rules/bindings.js` and paste into `figma_execute`.
 The script automatically:
 1. Finds the "Components" page
 2. Collects all COMPONENT and COMPONENT_SET nodes
-3. Validates each node against all 14 rules
+3. Validates each node against all 16 rules
 4. Returns a summary with pass/fail status
 
 ### Output
