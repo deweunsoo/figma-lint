@@ -1,0 +1,9 @@
+{
+  "name": "figma-lint",
+  "version": "1.0.0",
+  "description": "Figma variable binding validator — lint rules for design system compliance",
+  "main": "rules/bindings.js",
+  "keywords": ["figma", "lint", "design-system", "variables", "bindings"],
+  "author": "deweunsoo",
+  "license": "MIT"
+}
